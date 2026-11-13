@@ -26,7 +26,7 @@
   },
   "compileType": "game",
   "libVersion": "latest",
-  "appid": "wx4ad4e18489ebcb28",
+  "appid": "wx9312133cf5450d51",
   "projectname": "三人扣点门板屋",
   "condition": {
     "search": {
@@ -49,10 +49,22 @@
   "simulatorPluginLibVersion": {},
   "packOptions": {
     "ignore": [
-      { "type": "folder", "value": "preview" },
-      { "type": "folder", "value": "tools" },
-      { "type": "file", "value": "README.md" },
-      { "type": "file", "value": "project.private.config.json" }
+      {
+        "value": "preview",
+        "type": "folder"
+      },
+      {
+        "value": "tools",
+        "type": "folder"
+      },
+      {
+        "value": "README.md",
+        "type": "file"
+      },
+      {
+        "value": "project.private.config.json",
+        "type": "file"
+      }
     ],
     "include": []
   },

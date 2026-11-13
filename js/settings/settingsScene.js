@@ -5,6 +5,7 @@ import {
   SAFE_BOTTOM,
 } from '../render.js';
 import { roundRect, spacedText } from '../ui/draw.js';
+import audio from '../audio/audioManager.js';
 
 const SANS = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
 const GOLD = '#e8c37a';
@@ -77,6 +78,7 @@ export default class SettingsScene {
         ],
       },
     ];
+    audio.syncFromSettings(this.toggles); // 启动时把已有开关同步给音频模块
   }
 
   readToggle(key) {
@@ -152,9 +154,7 @@ export default class SettingsScene {
   /* ---------- 行为 ---------- */
 
   vibrate() {
-    if (this.toggles.vib && typeof wx.vibrateShort === 'function') {
-      wx.vibrateShort({ type: 'light' });
-    }
+    audio.vibrate('light');
   }
 
   handleRow(id) {
@@ -162,9 +162,11 @@ export default class SettingsScene {
       const key = id.slice(7);
       this.toggles[key] = !this.toggles[key];
       this.saveToggle(STORAGE_KEYS[key], this.toggles[key]);
+      audio.syncFromSettings(this.toggles); // 音乐/音效/震动开关立即生效
       this.vibrate();
       return;
     }
+    audio.playSfx('click');
     switch (id) {
       case 'rules':
         if (this.onNavigate) this.onNavigate('rules');

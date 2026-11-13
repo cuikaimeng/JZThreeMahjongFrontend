@@ -9,7 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8790;
+const PORT = Number(process.env.PORT) || 8790;
 const ROOT = path.join(__dirname, '..');
 
 const MIME = {
@@ -19,6 +19,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.css': 'text/css; charset=utf-8',
+  '.wav': 'audio/wav',
 };
 
 http

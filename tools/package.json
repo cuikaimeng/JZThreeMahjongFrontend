@@ -1,0 +1,9 @@
+{
+  "name": "jz-mahjong-audio-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "开发期音频生成/转码脚本依赖；tools/ 已被 packOptions.ignore 排除，不进小游戏包",
+  "dependencies": {
+    "@breezystack/lamejs": "1.2.7"
+  }
+}

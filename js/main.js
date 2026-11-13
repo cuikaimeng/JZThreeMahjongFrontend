@@ -34,6 +34,8 @@ import { adaptSummary, adaptRecord, adaptDetail } from './history/historyAdapter
 import { setBackendUser } from './user/userInfo.js';
 import { ensureWxProfile, requestWxProfile, syncWxProfile } from './user/wxProfile.js';
 import { enableShareMenu, shareRoom, parseLaunchQuery } from './net/share.js';
+import audio from './audio/audioManager.js';
+import fx from './fx/effects.js';
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -42,6 +44,7 @@ const HISTORY_PAGE_SIZE = 20;
  */
 export default class Main {
   constructor() {
+    audio.init();
     this.aniId = 0;
     this.current = 'lobby';
     this.rulesFrom = 'lobby'; // 规则页的返回目标（大厅/设置/创建房间）
@@ -308,6 +311,7 @@ export default class Main {
     });
     // 开局：服务器广播后进入对局页（在线模式）
     net.on('gameStart', () => {
+      audio.onGameEvent('gameStart');
       const pub = this.scenes.room.room.pub;
       this.scenes.game.setOnline({
         code: this.scenes.room.room.code,
@@ -343,6 +347,7 @@ export default class Main {
   }
 
   onLobbyButton(id) {
+    audio.playSfx('click');
     if (id === 'rules') {
       this.rulesFrom = 'lobby';
       this.current = 'rules';
@@ -385,6 +390,7 @@ export default class Main {
       return [t.clientX, t.clientY];
     };
     wx.onTouchStart((e) => {
+      audio.unlock(); // iOS 需在首次用户手势后才能起播 BGM
       const t = e.touches[0];
       if (t) {
         const [x, y] = pt(t);
@@ -423,6 +429,12 @@ export default class Main {
   }
 
   loop() {
+    // 场景切换时自动换 BGM（集中在这里，无需改动各处的 current 赋值）
+    if (this.current !== this._audioScene) {
+      this._audioScene = this.current;
+      audio.setScene(this.current);
+      if (this.current !== 'game') fx.stop(); // 离开对局页时清掉特效状态
+    }
     resetFrameTransform(ctx);
     ctx.clearRect(0, 0, PHYS_WIDTH, PHYS_HEIGHT);
     if (isLandscape) {

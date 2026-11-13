@@ -18,6 +18,8 @@ import {
   lapName,
 } from './gameRules.js';
 import { net } from '../net/ws.js';
+import audio from '../audio/audioManager.js';
+import fx from '../fx/effects.js';
 import {
   canHu,
   canAngang,
@@ -246,6 +248,7 @@ export default class GameScene {
   /** 服务器事件入口（main.js 路由） */
   onNetEvent(t, d) {
     if (!this.net) return;
+    audio.onGameEvent(t, d); // 服务端事件统一分发音效（打牌/碰/杠/听/胡等）
     switch (t) {
       case 'wallCommit':
         // 牌库定序指纹：对局开始前已确定、不可变（公平性核验用）
@@ -290,6 +293,7 @@ export default class GameScene {
 
   /** 每局重置（首局由 dice 事件触发，续局由 dealer 事件触发） */
   resetForRound(d) {
+    fx.stop(); // 新一局开始，清掉可能仍在播放的上一局胡牌特效
     if (d.roundNo != null) this.handNo = d.roundNo;
     if (d.rotations != null) this.rotations = d.rotations;
     this.roundText = d.roundName || lapName(this.rotations || 0);
@@ -628,6 +632,17 @@ export default class GameScene {
     this.layout = null;
     const isHu = !!d.winnerSeat;
     wx.showToast({ title: isHu ? d.handName || '胡牌' : '流局', icon: 'none' });
+    if (isHu) {
+      fx.playWin({
+        handName: d.handName,
+        fanTotal: d.fanTotal || d.multiplier,
+        zimo: d.zimo,
+        robGang: d.robGang,
+        winner: this.seatName(this.localSeat(d.winnerSeat)),
+      });
+    } else {
+      fx.stop();
+    }
   }
 
   /** 杠即时积分（暗杠/补杠/点杠，与胡牌无关） */
@@ -1101,6 +1116,7 @@ export default class GameScene {
     }
     this.selected = -1;
     this.drag = null;
+    if (!this.net) audio.playSfx('discard', { tile }); // 离线演示无服务端广播，本地兜底
     net.send('discard', { tile });
   }
 
@@ -1181,6 +1197,7 @@ export default class GameScene {
       return;
     }
     if (id.startsWith('act:')) {
+      audio.playSfx('click'); // 碰/杠/听/胡等操作按钮反馈（具体动作音效由服务端事件触发）
       const act = id.split(':')[1];
       if (this.net) {
         // 联机：把动作交给服务器裁决
@@ -1255,6 +1272,7 @@ export default class GameScene {
     if (this.phase === 'dice') this.drawDealerPanel(ctx);
     if (this.menuOpen) this.drawMenu(ctx);
     if (this.settleInfo) this.drawSettleOverlay(ctx);
+    fx.render(ctx, this.vw, this.vh, this.k); // 胡牌特效画在最上层，2.9s 自动淡出
   }
 
   drawBackground(ctx) {

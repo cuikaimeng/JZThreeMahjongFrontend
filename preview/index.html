@@ -194,6 +194,30 @@
     },
     clearStorageSync() { localStorage.clear(); },
     vibrateShort() {},
+    // 音频：用 HTML5 Audio 模拟 InnerAudioContext；小游戏包内路径 audio/ → 预览页的 ../audio/
+    createInnerAudioContext() {
+      const el = new Audio();
+      const errCbs = [];
+      el.addEventListener('error', () => errCbs.forEach((cb) => cb({ errMsg: 'audio error' })));
+      return {
+        get src() { return el.src; },
+        set src(v) { el.src = String(v).startsWith('audio/') ? '../' + v : v; },
+        get loop() { return el.loop; },
+        set loop(v) { el.loop = !!v; },
+        get volume() { return el.volume; },
+        set volume(v) { el.volume = Math.max(0, Math.min(1, Number(v) || 0)); },
+        get playbackRate() { return el.playbackRate; },
+        set playbackRate(v) { el.playbackRate = Math.max(0.5, Math.min(2, Number(v) || 1)); },
+        play() { const p = el.play(); if (p && p.catch) p.catch(() => {}); },
+        pause() { el.pause(); },
+        stop() { el.pause(); try { el.currentTime = 0; } catch (e) {} },
+        seek(t) { try { el.currentTime = t; } catch (e) {} },
+        destroy() { el.pause(); el.src = ''; },
+        onError(cb) { errCbs.push(cb); },
+        onEnded(cb) { el.addEventListener('ended', () => cb({})); },
+        onCanplay(cb) { el.addEventListener('canplay', () => cb({})); },
+      };
+    },
     getAccountInfoSync() {
       return {
         miniProgram: {
