@@ -25,10 +25,10 @@ import {
   canAngang,
   canBugang,
   canDeclareListen as canDeclareListenLocal,
-  isThirteenOrphans,
   tilePoint,
   listenCandidates,
   sortHand,
+  LISTEN_MIN_DISCARD_POINT,
 } from './handCheck.js';
 
 const SANS = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
@@ -46,6 +46,17 @@ function tileCn(t) {
   const m = /^([1-9])([mps])$/.exec(t);
   return m ? NUM_CN[+m[1]] + TILE_CN_MAP[m[2]] : TILE_CN_MAP[t] || t;
 }
+
+/** 可展示/可胡的听口：1、2 点任何情况都不能胡，不出现在提示中 */
+function visibleWaits(waits) {
+  return (Array.isArray(waits) ? waits : []).filter((t) => tilePoint(t) >= LISTEN_MIN_DISCARD_POINT);
+}
+
+/** 收到这些事件说明服务器已离开结算阶段，结算浮层必须关闭（防止卡页） */
+const PLAY_PHASE_EVENTS = new Set([
+  'wallCommit', 'dice', 'dealer', 'dealStep', 'deal', 'turn', 'draw',
+  'discard', 'action', 'offer', 'listen', 'gangSettle',
+]);
 
 /**
  * 对局页：按设计稿 03 布局
@@ -249,6 +260,8 @@ export default class GameScene {
   onNetEvent(t, d) {
     if (!this.net) return;
     audio.onGameEvent(t, d); // 服务端事件统一分发音效（打牌/碰/杠/听/胡等）
+    // 兜底：服务器已进入下一局的对局事件，旧结算浮层一律关闭，避免漏收 dealer 时卡页
+    if (this.settleInfo && PLAY_PHASE_EVENTS.has(t)) this.clearSettleOverlay();
     switch (t) {
       case 'wallCommit':
         // 牌库定序指纹：对局开始前已确定、不可变（公平性核验用）
@@ -539,8 +552,10 @@ export default class GameScene {
     const local = this.localSeat(d.seat);
     // 被碰/明杠取走的弃牌不再作为「最新打出」放大显示
     if (d.type === 'peng' || (d.type === 'gang' && !d.concealed)) this.latestDiscard = null;
-    // 报听者杠后听口可能变化：随动作事件同步
-    if (Array.isArray(d.listenWaits)) this.listenWaits[local] = d.listenWaits.slice();
+    // 报听者杠后听口可能变化：仅为本人同步（他人听口不缓存、不展示）
+    if (local === 'me' && Array.isArray(d.listenWaits)) {
+      this.listenWaits.me = visibleWaits(d.listenWaits);
+    }
     // 补杠不新增副露，改已有碰的类型
     if (d.type === 'bugang') {
       const m = this.melds[local].find((x) => x.type === 'peng' && x.tile === d.tile);
@@ -574,23 +589,25 @@ export default class GameScene {
     this.layout = null;
   }
 
-  /** 报听：标记听牌状态（听后不能再碰/杠） */
+  /** 报听：标记听牌状态；具体听口仅本人可见（ws 层已对他人过滤 waits） */
   onListen(d) {
     const local = this.localSeat(d.seat);
+    const self = local === 'me';
     this.listenPick = false;
     this.listening[local] = true;
-    this.listenWaits[local] = Array.isArray(d.waits) ? d.waits.slice() : [];
+    // 他人不缓存具体听口，即使服务端误发也不保留
+    this.listenWaits[local] = self ? visibleWaits(d.waits) : [];
     if (d.listening) {
       SEAT_CLOCKWISE.forEach((s) => {
         this.listening[s] = !!d.listening[this.serverSeat(s)];
       });
     }
     this.layout = null;
-    const waits = (this.listenWaits[local] || []).map(tileCn).join(' / ');
-    if (local === 'me') {
+    const waits = self ? visibleWaits(this.listenWaits[local]).map(tileCn).join(' / ') : '';
+    if (self) {
       wx.showToast({ title: waits ? `已报听：听 ${waits}` : '已报听：摸什么打什么，不能再碰杠', icon: 'none' });
     } else {
-      wx.showToast({ title: `${this.seatName(local)} 报听${waits ? `：听 ${waits}` : ''}`, icon: 'none' });
+      wx.showToast({ title: `${this.seatName(local)} 报听`, icon: 'none' });
     }
   }
 
@@ -645,6 +662,19 @@ export default class GameScene {
     }
   }
 
+  /** 关闭结算浮层：下一局开始 / 断线重连快照到达时兜底，避免卡在结算页 */
+  clearSettleOverlay() {
+    this.settleInfo = null;
+    this.canNext = false;
+    this.settleReady = false;
+    this.readySeats = [];
+    this.matchOver = false;
+    this.offer = null;
+    this.clearTurnAuto();
+    this.stopTimer();
+    this.layout = null;
+  }
+
   /** 杠即时积分（暗杠/补杠/点杠，与胡牌无关） */
   onGangSettle(d) {
     const names = { angang: '暗杠', bugang: '补杠', diangang: '点杠' };
@@ -672,9 +702,17 @@ export default class GameScene {
     wx.showToast({ title: `对局结束（${(d && d.laps) || this.totalLaps} 圈）`, icon: 'none' });
   }
 
-  /** 断线重连快照 */
+  /** 断线重连快照：仍在结算阶段则恢复结算页，否则关掉旧浮层还原牌局 */
   onResume(d) {
     if (!d) return;
+    if (d.phase === 'settle' && d.settle) {
+      this.onSettle(d.settle);
+      this.canNext = true;
+      this.readySeats = (d.nextConfirm || []).map((s) => this.localSeat(s));
+      this.settleReady = this.readySeats.includes('me');
+    } else {
+      this.clearSettleOverlay();
+    }
     if (d.roundNo != null) this.handNo = d.roundNo;
     if (d.rotations != null) this.rotations = d.rotations;
     if (d.roundName) this.roundText = d.roundName;
@@ -707,10 +745,10 @@ export default class GameScene {
         this.listenDiscard[s] = v == null ? -1 : v;
       });
     }
+    // 服务端快照只含本人听口（以我的服务器座位为键）；他人一律不恢复，避免泄露
+    this.listenWaits = { me: [], left: [], right: [] };
     if (d.listenWaits) {
-      SEAT_CLOCKWISE.forEach((s) => {
-        this.listenWaits[s] = d.listenWaits[this.serverSeat(s)] || [];
-      });
+      this.listenWaits.me = visibleWaits(d.listenWaits[this.meSeat]);
     }
     this.layout = null;
   }
@@ -726,10 +764,10 @@ export default class GameScene {
     if (!this.myTurnNow()) return null;
     if (this.hand.length % 3 !== 2) return null;
     const acts = [];
-    // 未报听不能胡；十三幺十三面听实为 10 面（1万/1条/1饼 1 点不能胡）
+    // 未报听不能胡；自摸胡牌张必须 ≥3 点（1、2 点任何情况都不能胡）
     if (this.listening.me && canHu(this.hand)) {
       const winTile = this.lastDrawn || this.hand[this.hand.length - 1];
-      if (!(isThirteenOrphans(this.hand) && tilePoint(winTile) < 3)) acts.push('hu');
+      if (tilePoint(winTile) >= LISTEN_MIN_DISCARD_POINT) acts.push('hu');
     }
     if (this.gangCandidates().length) acts.push('gang');
     // 报听：需弃牌 ≥3 点，且听口至少一张 ≥6 点（报听后不能再听）
@@ -1869,16 +1907,16 @@ export default class GameScene {
     return Math.max(0, 4 - used);
   }
 
-  /** 待展示的胡口：报听选牌模式选中某张牌 → 该牌听口；已报听 → 全部听口 */
+  /** 待展示的胡口：报听选牌模式选中某张牌 → 该牌听口；已报听 → 全部听口（1、2 点不展示） */
   previewWaits() {
     if (this.listenPick) {
       if (this.selected < 0) return null;
       const tile = this.hand[this.selected];
       if (!tile) return null;
       const cand = listenCandidates(this.hand).find((c) => c.tile === tile);
-      return cand ? cand.waits : null;
+      return cand ? visibleWaits(cand.waits) : null;
     }
-    if (this.listening.me) return this.listenWaits.me || [];
+    if (this.listening.me) return visibleWaits(this.listenWaits.me);
     return null;
   }
 
@@ -2008,7 +2046,7 @@ export default class GameScene {
       } else if (this.listenPick) {
         chips.push({ text: '双击或拖动要扣的牌', gold: true });
       } else if (this.listening.me) {
-        const waits = (this.listenWaits.me || []).map(tileCn).join(' / ');
+        const waits = visibleWaits(this.listenWaits.me).map(tileCn).join(' / ');
         chips.push({ text: waits ? `已听 ${waits}` : '已听牌', gold: true });
       } else if (this.offer) {
         const label = { hu: '胡', peng: '碰', gang: '杠' };

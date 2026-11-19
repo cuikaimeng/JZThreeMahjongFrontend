@@ -137,8 +137,10 @@ export function listenCandidates(hand) {
     }
     const waits = listens(rest);
     if (!waits.length) continue;
-    if (!waits.some((w) => tilePoint(w) >= LISTEN_MIN_WIN_POINT)) continue;
-    out.push({ tile, waits });
+    // 1、2 点任何情况都不能胡（含自摸），不进听口
+    const huWaits = waits.filter((w) => tilePoint(w) >= LISTEN_MIN_DISCARD_POINT);
+    if (!huWaits.some((w) => tilePoint(w) >= LISTEN_MIN_WIN_POINT)) continue;
+    out.push({ tile, waits: huWaits });
   }
   return out;
 }

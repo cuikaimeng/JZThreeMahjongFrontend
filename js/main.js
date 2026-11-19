@@ -38,6 +38,7 @@ import audio from './audio/audioManager.js';
 import fx from './fx/effects.js';
 
 const HISTORY_PAGE_SIZE = 20;
+const ACTIVE_ROOM_KEY = 'jz_active_room';
 
 /**
  * 游戏主函数：场景管理（大厅 / 规则 / 战绩 / 设置 / 创建房间 / 等待开局 / 对局）
@@ -108,10 +109,13 @@ export default class Main {
           password: cfg.pwd || cfg.password || undefined,
         });
         this.scenes.room.setRoom({ ...r.room, chips: cfg.chips, base: cfg.base || 1, pwd: cfg.pwd, online: true });
-        net.join(r.room.code);
+        // 先切场景：本地缓存/WS 异常都不能把用户卡在创建页
         this.current = 'room';
+        try { this.setActiveRoom({ ...r.room, pwd: cfg.pwd }); } catch (err) { console.error('[room] cache active failed', err); }
+        net.join(r.room.code);
       } catch (e) {
-        wx.showToast({ title: e.message || '创建房间失败', icon: 'none' });
+        console.error('[room] create failed', e);
+        wx.showToast({ title: '创建房间失败，请重试', icon: 'none' });
       }
     };
     this.scenes.join.onBack = () => {
@@ -122,17 +126,24 @@ export default class Main {
       try {
         const r = await apiJoinRoom(code, pwd || undefined);
         this.scenes.room.setRoom({ ...r.room, pwd, online: true });
+        this.current = 'room';
+        try { this.setActiveRoom({ ...r.room, pwd }); } catch (err) { console.error('[room] cache active failed', err); }
         net.join(r.room.code);
         wx.showToast({ title: '已加入房间', icon: 'success' });
-        this.current = 'room';
         return true;
       } catch (e) {
-        wx.showToast({ title: e.message || '加入房间失败', icon: 'none' });
+        console.error('[room] join failed', e);
+        wx.showToast({ title: '加入房间失败，请重试', icon: 'none' });
         return false;
       }
     };
+    // 左上角返回：只回大厅，房间保留；底部「退出房间」才真正退房
     this.scenes.room.onBack = () => {
+      this.current = 'lobby';
+    };
+    this.scenes.room.onExit = () => {
       net.leave();
+      this.clearActiveRoom();
       this.current = 'lobby';
     };
     // 房间内「邀请好友加入」→ 微信分享（带房号 + 密码）
@@ -149,6 +160,7 @@ export default class Main {
       this.current = 'game';
     };
     this.scenes.game.onExit = () => {
+      // 对局中退出只回大厅，房间保留；整场结束/解散时再清除入口
       this.current = 'lobby';
     };
     this.scenes.game.onFinish = (result) => {
@@ -164,6 +176,8 @@ export default class Main {
     };
 
     this.online = false;
+    const activeRoom = this.readActiveRoom();
+    if (activeRoom) this.scenes.lobby.setActiveRoom(activeRoom);
     if (typeof GameGlobal !== 'undefined') GameGlobal.__net = net; // 调试句柄
     this.initNet();
 
@@ -213,6 +227,43 @@ export default class Main {
   }
 
   /* ---------- 联机 ---------- */
+
+  /** 本地活跃房间：返回大厅不清房，仅在退出/解散/整场结束时清除 */
+  readActiveRoom() {
+    try {
+      const raw = wx.getStorageSync(ACTIVE_ROOM_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  setActiveRoom(room) {
+    if (!room || !room.code) return;
+    const v = { code: room.code, pwd: room.pwd || '', laps: room.laps || room.rounds || 2, base: room.base || 1 };
+    try { wx.setStorageSync(ACTIVE_ROOM_KEY, JSON.stringify(v)); } catch (e) { /* ignore */ }
+    this.scenes.lobby.setActiveRoom(v);
+  }
+
+  clearActiveRoom() {
+    try { wx.removeStorageSync(ACTIVE_ROOM_KEY); } catch (e) { /* ignore */ }
+    this.scenes.lobby.setActiveRoom(null);
+  }
+
+  /** 大厅「返回房间」：重新绑定 WS 座位，对局中会自动收到 gameResume 切回对局页 */
+  async resumeActiveRoom() {
+    const a = this.readActiveRoom();
+    if (!a || !a.code) return;
+    try {
+      const r = await apiJoinRoom(a.code, a.pwd || undefined);
+      this.scenes.room.setRoom({ ...r.room, pwd: a.pwd, online: true });
+      net.join(r.room.code);
+      this.current = 'room';
+    } catch (e) {
+      this.clearActiveRoom();
+      wx.showToast({ title: (e && e.message) || '房间已解散', icon: 'none' });
+    }
+  }
 
   /** 启动：微信资料 → 静默登录 → WebSocket → 分享进房 */
   async initNet() {
@@ -307,17 +358,38 @@ export default class Main {
     });
     net.on('roomClosed', (d) => {
       wx.showToast({ title: (d && d.reason) || '房间已解散', icon: 'none' });
+      this.clearActiveRoom();
       this.current = 'lobby';
     });
     // 开局：服务器广播后进入对局页（在线模式）
-    net.on('gameStart', () => {
+    net.on('gameStart', (d) => {
       audio.onGameEvent('gameStart');
-      const pub = this.scenes.room.room.pub;
+      const room = this.scenes.room.room || {};
+      const pub = this.scenes.room.pub || room.pub || room;
+      const players = d && Array.isArray(d.players) && d.players.length ? d.players : (pub.players || []);
+      const user = getUser();
+      const me = players.find((p) => String(p.userId) === String(user && user.id));
       this.scenes.game.setOnline({
-        code: this.scenes.room.room.code,
-        laps: this.scenes.room.room.laps || this.scenes.room.room.rounds || 2,
-        players: pub ? pub.players || [] : [],
-        meSeat: this.scenes.room.mySeat || 'me',
+        code: room.code,
+        laps: (d && d.laps) || pub.laps || pub.rounds || room.laps || 2,
+        players,
+        meSeat: (me && me.seat) || this.scenes.room.mySeat || 'me',
+      });
+      this.current = 'game';
+    });
+    // 对局中断线重进：REST 进房默认落在等待房，收到快照后直接切回对局页
+    net.on('gameResume', (d) => {
+      if (this.current === 'game') return;
+      const room = this.scenes.room.room || {};
+      const pub = this.scenes.room.pub || room.pub || room;
+      const players = d && Array.isArray(d.players) && d.players.length ? d.players : (pub.players || []);
+      const user = getUser();
+      const me = players.find((p) => String(p.userId) === String(user && user.id));
+      this.scenes.game.setOnline({
+        code: room.code,
+        laps: pub.laps || pub.rounds || room.laps || 2,
+        players,
+        meSeat: (me && me.seat) || this.scenes.room.mySeat || 'me',
       });
       this.current = 'game';
     });
@@ -337,9 +409,13 @@ export default class Main {
       'settle',
       'roundEnd',
       'nextReady',
-      'matchOver',
       'gameResume',
     ].forEach((t) => net.on(t, (d) => this.scenes.game.onNetEvent(t, d)));
+    // 整场结束：清除活跃房间入口，最终结算仍由对局页展示
+    net.on('matchOver', (d) => {
+      this.clearActiveRoom();
+      this.scenes.game.onNetEvent('matchOver', d);
+    });
   }
 
   cur() {
@@ -366,12 +442,16 @@ export default class Main {
       this.current = 'settings';
       return;
     }
-    if (id === 'create') {
-      this.current = 'create';
+    if (id === 'create' || id === 'join') {
+      if (this.readActiveRoom()) {
+        wx.showToast({ title: '你已在房间中，请先退出当前房间', icon: 'none' });
+        return;
+      }
+      this.current = id;
       return;
     }
-    if (id === 'join') {
-      this.current = 'join';
+    if (id === 'resumeRoom') {
+      this.resumeActiveRoom();
       return;
     }
     wx.showToast({ title: '加入房间 · 敬请期待', icon: 'none' });

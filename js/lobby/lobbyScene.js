@@ -45,10 +45,17 @@ export default class LobbyScene {
     this.startTime = Date.now();
     this.userInfo = { nickName: '微信用户', avatarUrl: '' };
     this.avatarImg = null; // 微信头像图片（加载完成后替换占位）
+    this.activeRoom = null; // 已加入/创建的房间（返回大厅后保留）
     fetchUserInfo((u) => {
       this.userInfo = u;
       if (u.avatarUrl) this.loadAvatar(u.avatarUrl);
     });
+    this.layout();
+  }
+
+  /** 已在房间时显示悬浮返回入口，并重建按钮命中区域 */
+  setActiveRoom(room) {
+    this.activeRoom = room || null;
     this.layout();
   }
 
@@ -137,7 +144,13 @@ export default class LobbyScene {
 
     // ---- 可点击区域 ----
     const bw = W - this.padX * 2;
+    const resumeH = 38 * k;
+    this.resumeY = this.primaryY - 12 * k - resumeH;
     this.buttons = [
+      // 悬浮返回入口放在最前：与下方按钮重叠时优先命中
+      ...(this.activeRoom
+        ? [{ id: 'resumeRoom', x: this.padX, y: this.resumeY, w: bw, h: resumeH, toast: '返回房间' }]
+        : []),
       { id: 'create', x: this.padX, y: this.primaryY, w: bw, h: primaryH, toast: '创建房间' },
       { id: 'join', x: this.padX, y: this.outlineY, w: bw, h: outlineH, toast: '加入房间' },
     ];
@@ -172,6 +185,7 @@ export default class LobbyScene {
     this.drawRules(ctx);
     this.drawPrimaryButton(ctx);
     this.drawOutlineButton(ctx);
+    this.drawActiveRoomButton(ctx);
     this.drawFooter(ctx);
   }
 
@@ -425,7 +439,8 @@ export default class LobbyScene {
     const r = 16 * k;
 
     ctx.save();
-    if (this.pressedId === 'create') ctx.globalAlpha = 0.75;
+    if (this.activeRoom) ctx.globalAlpha = 0.42;
+    else if (this.pressedId === 'create') ctx.globalAlpha = 0.75;
 
     ctx.shadowColor = 'rgba(232,195,122,.75)';
     ctx.shadowBlur = 24 * k;
@@ -504,7 +519,8 @@ export default class LobbyScene {
     const h = b.h;
 
     ctx.save();
-    if (this.pressedId === 'join') ctx.globalAlpha = 0.75;
+    if (this.activeRoom) ctx.globalAlpha = 0.42;
+    else if (this.pressedId === 'join') ctx.globalAlpha = 0.75;
 
     const g = ctx.createLinearGradient(0, y, 0, y + h);
     g.addColorStop(0, 'rgba(232,195,122,.14)');
@@ -542,6 +558,42 @@ export default class LobbyScene {
       fill: '#c2a978',
       baseline: 'middle',
     });
+    ctx.restore();
+  }
+
+  /** 悬浮提示：已在房间 · 返回（创建/加入按钮此时不可用） */
+  drawActiveRoomButton(ctx) {
+    if (!this.activeRoom) return;
+    const { k, padX } = this;
+    const W = SCREEN_WIDTH;
+    const x = padX;
+    const y = this.resumeY;
+    const w = W - padX * 2;
+    const h = 38 * k;
+    const r = 12 * k;
+
+    ctx.save();
+    if (this.pressedId === 'resumeRoom') ctx.globalAlpha = 0.75;
+    ctx.shadowColor = 'rgba(126,226,184,.45)';
+    ctx.shadowBlur = 14 * k;
+    ctx.shadowOffsetY = 4 * k;
+    roundRect(ctx, x, y, w, h, r);
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, 'rgba(126,226,184,.26)');
+    g.addColorStop(1, 'rgba(63,189,139,.14)');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = 'rgba(126,226,184,.62)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    const text = `已在房间 ${this.activeRoom.code || ''} · 返回`;
+    ctx.font = `600 ${Math.round(14 * k)}px ${SANS}`;
+    ctx.fillStyle = '#d8f5e8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text.trim(), W / 2, y + h / 2 + 0.5 * k);
     ctx.restore();
   }
 

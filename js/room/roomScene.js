@@ -241,8 +241,13 @@ export default class RoomScene {
   handle(id) {
     switch (id) {
       case 'back':
-      case 'exit':
+        // 左上角返回：回大厅但保留房间
         if (this.onBack) this.onBack();
+        break;
+      case 'exit':
+        // 底部「退出房间」：真正退房
+        if (this.onExit) this.onExit();
+        else if (this.onBack) this.onBack();
         break;
       case 'invite':
       case 'inviteBtn': {
